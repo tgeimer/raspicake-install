@@ -340,7 +340,7 @@ fi
 # ------------------- configure database connection -------------
 if [ -f /usr/share/nginx/www/$PROJECT/config/app.php ]; then
   sed -i s,"MYSQL_USER","$MYSQL_USER",g /usr/share/nginx/www/$PROJECT/config/app.php
-  sed -i s,"MYSQL_USER_PW","$MYSQL_USER_PW1",g /usr/share/nginx/www/$PROJECT/config/app.php
+  sed -i s,"MYSQL_PW","$MYSQL_USER_PW1",g /usr/share/nginx/www/$PROJECT/config/app.php
   sed -i s,"MYSQL_DBNAME","$MYSQL_DBNAME",g /usr/share/nginx/www/$PROJECT/config/app.php
 fi
 
