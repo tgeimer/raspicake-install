@@ -19,9 +19,9 @@
 #
 ############################################################################
 
-PROJECT=cakepi
+PROJECT=raspicake
 CWD=$(pwd)
-INSTALL_LOG=$CWD/picake_install.log
+INSTALL_LOG=$CWD/raspicake_install.log
 FINAL_RC=0
 RC=0
 RESULT=""
@@ -29,6 +29,7 @@ RESULT=""
 # Colors:
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+BLUE='\033[0;34m'
 NC='\033[0m' # reset color
 
 on_die() {
@@ -42,7 +43,7 @@ trap 'on_die' INT
 
 # Script must be run as root (or as user pi with "sudo")
 if [ $(whoami) != "root" ]; then
-  printf "${RED}ERROR${NC}: This script must be run with root privileges. Try\n${GREEN}sudo %s${NC}\n" $0
+  printf "${RED}ERROR${NC}: This script must be run with root privileges. \nTry${BLUE}sudo %s${NC} instead\n" $0
   on_die
 fi
 
@@ -75,25 +76,31 @@ packet_install(){
 # ======================= INSTALLATION =========================
 
 # -------------- Interaction ----------------------------------
-PROJECT=$(whiptail --inputbox "Please enter a project name" 20 60 "$PROJECT" 3>&1 1>&2 2>&3)
-if [ $? -ne 0 ]; then
-  printf "${RED}Installation aborted.${NC}\n" $PROJECT
-  on_die
-fi
-if [ -d /usr/share/$PROJECT ]; then
-  printf "[${RED}ERROR${NC}] /usr/share/%s already exists. please choose another name.\n" $PROJECT
-  on_die
-fi
-
-# set MySQL root Password:
-PW_EQUAL=0
-while [ $PW_EQUAL -eq 0 ]; do
-  MYSQL_ROOT_PW1=$(whiptail --inputbox "Please enter the password of your MySQL root user:" 20 60 "" 3>&1 1>&2 2>&3)
+PROJECT_EXISTS=1;
+while [ $PROJECT_EXISTS -eq 1 ]; do
+  PROJECT=$(whiptail --inputbox "Please enter a project name" 20 60 "$PROJECT" 3>&1 1>&2 2>&3)
   if [ $? -ne 0 ]; then
     printf "${RED}Installation aborted.${NC}\n" $PROJECT
     on_die
   fi
-  MYSQL_ROOT_PW2=$(whiptail --inputbox "Please confirm the MySQL root password:" 20 60 "" 3>&1 1>&2 2>&3)
+  if [ -d /usr/share/$PROJECT ]; then
+    whiptail  --title "ERROR" --msgbox "ERROR: /usr/share/$PROJECT already exists. please choose another name.\n" 20 60
+    PROJECT_EXISTS=1
+  else
+    PROJECT_EXISTS=0
+  fi
+done
+  
+# set MySQL root Password:
+#TODO: generate randomly
+PW_EQUAL=0
+while [ $PW_EQUAL -eq 0 ]; do
+  MYSQL_ROOT_PW1=$(whiptail --inputbox "Please enter the password of your MySQL root user:" 20 60 "$PROJECT" 3>&1 1>&2 2>&3)
+  if [ $? -ne 0 ]; then
+    printf "${RED}Installation aborted.${NC}\n" $PROJECT
+    on_die
+  fi
+  MYSQL_ROOT_PW2=$(whiptail --inputbox "Please confirm the MySQL root password:" 20 60 "$PROJECT" 3>&1 1>&2 2>&3)
   if [ $? -ne 0 ]; then
     printf "${RED}Installation aborted.${NC}\n" $PROJECT
     on_die
@@ -301,10 +308,10 @@ else
 fi
 
 # ------------------- install CakePHP 3.0 -------------------------------
-printf "%s\tinstalling CakePHP..." $(date +%H:%M:%S)
-printf "%s\tinstalling CakePHP..." $(date +%H:%M:%S) >> $INSTALL_LOG
+printf "%s\tinstalling RaspiCake app..." $(date +%H:%M:%S)
+printf "%s\tinstalling RaspiCake app..." $(date +%H:%M:%S) >> $INSTALL_LOG
 if [ ! -f /usr/share/nginx/www/$PROJECT/webroot/index.php ]; then
-  composer create-project --prefer-dist cakephp/app /usr/share/nginx/www/$PROJECT --no-interaction #>> /dev/null 2>&1
+  composer create-project -s dev --prefer-dist tgeimer/raspicake /usr/share/nginx/www/$PROJECT --no-interaction >> /dev/null 2>&1
   checkrc $? && printf "%s\n" "$RESULT" >> $INSTALL_LOG
   printf "%s\n" $RESULT
 else
@@ -313,16 +320,58 @@ else
 fi
 
 # ------------------- Set permissions ---------------------------
-
-
+printf "%s\tsetting CakePHP permissions..." $(date +%H:%M:%S)
+printf "%s\tsetting CakePHP permissions..." $(date +%H:%M:%S) >> $INSTALL_LOG
+PROJECT_OWNER=$(ls -l /usr/share/nginx/www | grep $PROJECT | cut -d " " -f 3)
+if [ "$PROJECT_OWNER" != "pi" ]; then
+  sudo chown -R pi:www-data /usr/share/nginx/www/$PROJECT
+  checkrc $? && printf "%s\n" "$RESULT" >> $INSTALL_LOG
+  printf "%s\n" $RESULT
+else
+  printf "[already correct]\n" >> $INSTALL_LOG
+  printf "[${GREEN}already correct${NC}]\n"
+fi
+# force tmp and log directories to be writable
+if [ -d /usr/share/nginx/www/$PROJECT ]; then
+  chmod -R 775 /usr/share/nginx/www/$PROJECT/tmp
+  chmod -R 775 /usr/share/nginx/www/$PROJECT/logs
+fi
+  
 # ------------------- configure database connection -------------
-sed -i s,"'username' => 'my_app'","'username' => '$MYSQL_USER'",g /usr/share/nginx/www/$PROJECT/config/app.php
-sed -i s,"'password' => 'secret'","'password' => '$MYSQL_USER_PW1'",g /usr/share/nginx/www/$PROJECT/config/app.php
-sed -i s,"'database' => 'my_app'","'database' => '$MYSQL_DBNAME'",g /usr/share/nginx/www/$PROJECT/config/app.php
+if [ -f /usr/share/nginx/www/$PROJECT/config/app.php ]; then
+  sed -i s,"MYSQL_USER","$MYSQL_USER",g /usr/share/nginx/www/$PROJECT/config/app.php
+  sed -i s,"MYSQL_USER_PW","$MYSQL_USER_PW1",g /usr/share/nginx/www/$PROJECT/config/app.php
+  sed -i s,"MYSQL_DBNAME","$MYSQL_DBNAME",g /usr/share/nginx/www/$PROJECT/config/app.php
+fi
 
-
+# ------------------- populating DB ---------------------------
+printf "%s\tpopulating database..." $(date +%H:%M:%S)
+printf "%s\tpopulating database..." $(date +%H:%M:%S) >> $INSTALL_LOG
+SQL_OUTPUT=$(mysql -u $MYSQL_USER --password="$MYSQL_USER_PW1" $MYSQL_DBNAME -e "show tables;" 2>&1)
+RC=$?
+if [ $RC -eq 0 ];then
+  if [ -f /usr/share/nginx/www/$PROJECT/config/schema/raspicake.sql ]; then
+    mysql -u $MYSQL_USER --password="$MYSQL_USER_PW1" $MYSQL_DBNAME < /usr/share/nginx/www/$PROJECT/config/schema/raspicake.sql
+	checkrc $? && printf "%s\n" "$RESULT" >> $INSTALL_LOG
+    printf "%s\n" $RESULT
+  else
+    FINAL_RC=$(expr $FINAL_RC + 1);
+    printf "[ERROR] /usr/share/nginx/www/%s/config/schema/raspicake.sql not found\n" $PROJECT >> $INSTALL_LOG
+    printf "[${RED}ERROR${NC}] /usr/share/nginx/www/%s/config/schema/raspicake.sql not found\n" $PROJECT
+  fi
+else
+  FINAL_RC=$(expr $FINAL_RC + 1);
+  printf "[ERROR]\n$SQL_OUTPUT\n" >> $INSTALL_LOG
+  printf "[${RED}ERROR${NC}]\n$SQL_OUTPUT\n"
+fi
+  
+printf "\n%s\t$PROJECT installation finished with %s errors\n\n" $(date +%H:%M:%S) $FINAL_RC >> $INSTALL_LOG
+printf "\n%s\t$PROJECT installation finished with %s errors\n\n" $(date +%H:%M:%S) $FINAL_RC
 
 service php5-fpm restart
 service nginx restart
+
+printf "\n\nDONE!\n\n" >> $INSTALL_LOG
+printf "\n\nDONE!\n\n"
 
 exit $FINAL_RC
