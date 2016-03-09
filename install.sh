@@ -90,7 +90,7 @@ while [ $PROJECT_EXISTS -eq 1 ]; do
     PROJECT_EXISTS=0
   fi
 done
-  
+
 # set MySQL root Password:
 #TODO: generate randomly
 PW_EQUAL=0
@@ -119,14 +119,14 @@ if [ $? -ne 0 ]; then
   printf "${RED}Installation aborted.${NC}\n" $PROJECT
   on_die
 fi
-MYSQL_USER=$(whiptail --inputbox "Please enter the DB username for the web app:" 20 60 "$PROJECT" 3>&1 1>&2 2>&3)
+MYSQL_USER=$(whiptail --inputbox "Please enter the username for the DB:" 20 60 "$PROJECT" 3>&1 1>&2 2>&3)
 if [ $? -ne 0 ]; then
   printf "${RED}Installation aborted.${NC}\n" $PROJECT
   on_die
 fi
 PW_EQUAL=0
 while [ $PW_EQUAL -eq 0 ]; do
-  MYSQL_USER_PW1=$(whiptail --inputbox "Please enter the password for DB user $MYSQL_USER:" 20 60 "$PROJECT" 3>&1 1>&2 2>&3)
+  MYSQL_USER_PW1=$(whiptail --inputbox "Please enter the password for the DB user $MYSQL_USER:" 20 60 "$PROJECT" 3>&1 1>&2 2>&3)
   if [ $? -ne 0 ]; then
     printf "${RED}Installation aborted.${NC}\n" $PROJECT
     on_die
@@ -190,27 +190,9 @@ if [ $(mysql -u root -p"$MYSQL_ROOT_PW1" -e "SELECT User FROM mysql.user;" --bat
   printf "[already exists]\n" >> $INSTALL_LOG
   printf "[${GREEN}already exists${NC}]\n"
 else
-  mysql -u root -p"$MYSQL_ROOT_PW1" -e "DROP USER '$MYSQL_USER'@'localhost';CREATE USER '$MYSQL_USER'@'localhost' IDENTIFIED BY '$MYSQL_USER_PW1'; GRANT ALL ON $MYSQL_DBNAME.* TO '$MYSQL_USER'@'localhost'; FLUSH PRIVILEGES;"
+  mysql -u root -p"$MYSQL_ROOT_PW1" -e "CREATE USER '$MYSQL_USER'@'localhost' IDENTIFIED BY '$MYSQL_USER_PW1'; GRANT ALL ON $MYSQL_DBNAME.* TO '$MYSQL_USER'@'localhost'; FLUSH PRIVILEGES;"
   checkrc $? && printf "%s\n" "$RESULT" >> $INSTALL_LOG
   printf "%s\n" "$RESULT"
-fi
-
-# ----------------- WiringPi Library -------------
-# install WiringPi library by @Drogon.
-# This is used for convenient control of the GPIO pins:
-printf "%s\tInstalling WiringPi..." $(date +%H:%M:%S)
-printf "%s\tInstalling WiringPi..." $(date +%H:%M:%S) >> $INSTALL_LOG
-if [ $(which gpio) ]; then
-  printf "[already installed]\n" >> $INSTALL_LOG
-  printf "[${GREEN}already installed${NC}]\n"
-else
-  cd /usr/share
-  git clone git://git.drogon.net/wiringPi
-  cd wiringPi
-  ./build
-  checkrc $? && printf "%s\n" "$RESULT" >> $INSTALL_LOG
-  printf "%s\n" "$RESULT"
-  cd $CWD
 fi
 
 
@@ -336,7 +318,7 @@ if [ -d /usr/share/nginx/www/$PROJECT ]; then
   chmod -R 775 /usr/share/nginx/www/$PROJECT/tmp
   chmod -R 775 /usr/share/nginx/www/$PROJECT/logs
 fi
-  
+
 # ------------------- configure database connection -------------
 if [ -f /usr/share/nginx/www/$PROJECT/config/app.php ]; then
   sed -i s,"MYSQL_USER","$MYSQL_USER",g /usr/share/nginx/www/$PROJECT/config/app.php
@@ -364,7 +346,43 @@ else
   printf "[ERROR]\n$SQL_OUTPUT\n" >> $INSTALL_LOG
   printf "[${RED}ERROR${NC}]\n$SQL_OUTPUT\n"
 fi
-  
+
+# ------------------- adding admin user ---------------------------
+printf "%s\tadding admin user..." $(date +%H:%M:%S)
+printf "%s\tadding admin user..." $(date +%H:%M:%S) >> $INSTALL_LOG
+ADMIN_NUM=$(mysql -u $MYSQL_USER --password="$MYSQL_USER_PW1" $MYSQL_DBNAME -e "select count(*) from users where username='admin';" -B | tail -n 1)
+if [ $ADMIN_NUM -eq 0 ]; then
+  /usr/share/nginx/www/$PROJECT/bin/cake user add > /dev/null 2>&1
+  checkrc $? && printf "%s\n" "$RESULT" >> $INSTALL_LOG
+  printf "%s\n" $RESULT
+else
+  if [ $ADMIN_NUM -eq 1 ]; then
+    printf "[already exists]\n" >> $INSTALL_LOG
+    printf "[${GREEN}already exists${NC}]\n"
+  else
+    printf "[ERROR] weird number of admin accounts %s\n" $ADMIN_NUM >> $INSTALL_LOG
+    printf "[${RED}ERROR${NC}] weird number of admin accounts %s\n" $ADMIN_NUM
+  fi
+fi
+
+# ------------------- adding this Raspi ---------------------------
+printf "%s\tadding this Raspberry Pi..." $(date +%H:%M:%S)
+printf "%s\tadding this Raspberry Pi..." $(date +%H:%M:%S) >> $INSTALL_LOG
+RASPI_NUM=$(mysql -u $MYSQL_USER --password="$MYSQL_USER_PW1" $MYSQL_DBNAME -e "select count(*) from raspis where hostname='$HOSTNAME';" -B | tail -n 1)
+if [ $RASPI_NUM -eq 0 ]; then
+  /usr/share/nginx/www/$PROJECT/bin/cake raspi add localhost $(hostname -I) > /dev/null 2>&1
+  checkrc $? && printf "%s\n" "$RESULT" >> $INSTALL_LOG
+  printf "%s\n" $RESULT
+else
+  if [ $ADMIN_NUM -eq 1 ]; then
+    printf "[already exists]\n" >> $INSTALL_LOG
+    printf "[${GREEN}already exists${NC}]\n"
+  else
+    printf "[ERROR] weird number of admin accounts %s\n" $ADMIN_NUM >> $INSTALL_LOG
+    printf "[${RED}ERROR${NC}] weird number of admin accounts %s\n" $ADMIN_NUM
+  fi
+fi
+
 printf "\n%s\t$PROJECT installation finished with %s errors\n\n" $(date +%H:%M:%S) $FINAL_RC >> $INSTALL_LOG
 printf "\n%s\t$PROJECT installation finished with %s errors\n\n" $(date +%H:%M:%S) $FINAL_RC
 
