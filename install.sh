@@ -17,6 +17,8 @@
 # 7. you have executed "sudo apt-get update && sudo apt-get upgrade -y"
 #    to have your raspberry pi up to date and the current repositories
 #
+# TODO: implement https://github.com/WiringPi/WiringPi-PHP
+# 		instead of calling gpio via bash ...
 ############################################################################
 
 PROJECT=raspicake
@@ -25,6 +27,7 @@ INSTALL_LOG=$CWD/raspicake_install.log
 FINAL_RC=0
 RC=0
 RESULT=""
+RASPI_IP=$(hostname -I | tr -d '[[:space:]]')
 
 # Colors:
 RED='\033[0;31m'
@@ -119,14 +122,14 @@ if [ $? -ne 0 ]; then
   printf "${RED}Installation aborted.${NC}\n" $PROJECT
   on_die
 fi
-MYSQL_USER=$(whiptail --inputbox "Please enter the username for the DB:" 20 60 "$PROJECT" 3>&1 1>&2 2>&3)
+MYSQL_USER=$(whiptail --inputbox "Please enter the DB username for the web app:" 20 60 "$PROJECT" 3>&1 1>&2 2>&3)
 if [ $? -ne 0 ]; then
   printf "${RED}Installation aborted.${NC}\n" $PROJECT
   on_die
 fi
 PW_EQUAL=0
 while [ $PW_EQUAL -eq 0 ]; do
-  MYSQL_USER_PW1=$(whiptail --inputbox "Please enter the password for the DB user $MYSQL_USER:" 20 60 "$PROJECT" 3>&1 1>&2 2>&3)
+  MYSQL_USER_PW1=$(whiptail --inputbox "Please enter the password for DB user $MYSQL_USER:" 20 60 "$PROJECT" 3>&1 1>&2 2>&3)
   if [ $? -ne 0 ]; then
     printf "${RED}Installation aborted.${NC}\n" $PROJECT
     on_die
@@ -164,6 +167,7 @@ packet_install php-apc
 packet_install php5-cli
 packet_install php5-intl
 packet_install php5-mysql
+packet_install php5-dev
 
 # --------------- install MySQL --------------
 if [ ! $(which mysql) ]; then
@@ -190,9 +194,55 @@ if [ $(mysql -u root -p"$MYSQL_ROOT_PW1" -e "SELECT User FROM mysql.user;" --bat
   printf "[already exists]\n" >> $INSTALL_LOG
   printf "[${GREEN}already exists${NC}]\n"
 else
-  mysql -u root -p"$MYSQL_ROOT_PW1" -e "CREATE USER '$MYSQL_USER'@'localhost' IDENTIFIED BY '$MYSQL_USER_PW1'; GRANT ALL ON $MYSQL_DBNAME.* TO '$MYSQL_USER'@'localhost'; FLUSH PRIVILEGES;"
+  SQL_INSERT="FLUSH PRIVILEGES; INSERT INTO user (user, host) VALUES ('$MYSQL_USER', 'localhost');"
+  mysql -u root -p"$MYSQL_ROOT_PW1" mysql -e "$SQL_INSERT"
+  checkrc $? && printf "%s\n" "$RESULT" >> $INSTALL_LOG
+  SQL_INSERT2="FLUSH PRIVILEGES; SET PASSWORD FOR '$MYSQL_USER'@'localhost' = PASSWORD('$MYSQL_USER_PW1');"
+  mysql -u root -p"$MYSQL_ROOT_PW1" mysql -e "$SQL_INSERT2"
+  checkrc $? && printf "SQL 2 : %s\n" "$RESULT"
+  SQL_INSERT2="FLUSH PRIVILEGES; GRANT ALL ON $MYSQL_DBNAME.* TO '$MYSQL_USER'@'localhost'; FLUSH PRIVILEGES;"
+  mysql -u root -p"$MYSQL_ROOT_PW1" -e "$SQL_INSERT3"
+  checkrc $? && printf "SQL 3 : %s\n" "$RESULT"
+fi
+
+# ----------------- WiringPi Library -------------
+# install WiringPi library by @Drogon.
+# This is used for convenient control of the GPIO pins:
+printf "%s\tInstalling WiringPi..." $(date +%H:%M:%S)
+printf "%s\tInstalling WiringPi..." $(date +%H:%M:%S) >> $INSTALL_LOG
+if [ $(which gpio) ]; then
+  printf "[already installed]\n" >> $INSTALL_LOG
+  printf "[${GREEN}already installed${NC}]\n"
+else
+  cd /usr/share
+  git clone git://git.drogon.net/wiringPi
+  cd wiringPi
+  ./build
   checkrc $? && printf "%s\n" "$RESULT" >> $INSTALL_LOG
   printf "%s\n" "$RESULT"
+  cd $CWD
+fi
+
+# ----------------- install WiringPi-PHP -------------
+printf "%s\tInstalling WiringPi-PHP..." $(date +%H:%M:%S)
+printf "%s\tInstalling WiringPi-PHP..." $(date +%H:%M:%S) >> $INSTALL_LOG
+if [ -f $(php-config --extension-dir)/wiringpi.so ]; then
+  printf "[already installed]\n" >> $INSTALL_LOG
+  printf "[${GREEN}already installed${NC}]\n"
+else
+  git clone --recursive https://github.com/WiringPi/WiringPi-PHP.git
+  cd WiringPi-PHP
+  ./build.sh
+  checkrc $? && printf "%s\n" "$RESULT" >> $INSTALL_LOG
+  printf "%s\n" "$RESULT"
+  ./install.sh
+  cp wiringpi.php /usr/share/nginx/www/$PROJECT/vendor/wiringpi-php
+  cat <<EOT > /etc/php5/mods-available/wiringpi.ini
+extension=wiringpi.so
+wiringpi.pinmaptype=[PINS|GPIO|USER]
+EOT
+  ln -s ../mods-available/wiringpi.ini /etc/php5/conf.d/20-wiringpi.ini
+  cd $CWD
 fi
 
 
@@ -216,7 +266,6 @@ FINAL_RC=($FINAL_RC + $RC)
 # --------------- create a wopi site for nginx -----------------
 printf "%s\tcreating nginx site for wopi..." $(date +%H:%M:%S)
 printf "%s\tcreating nginx site for wopi..." $(date +%H:%M:%S) >> $INSTALL_LOG
-_IP=$(hostname -I)
 if [ ! -f /etc/nginx/sites-available/$PROJECT ]; then
   cat <<EOT > /etc/nginx/sites-available/$PROJECT
 server {
@@ -248,8 +297,9 @@ server {
 EOT
 
   # now replace some placeholders with variables:
-  sed -i "s/RASPI_IP/$(hostname -I | tr -d '[[:space:]]')/g" /etc/nginx/sites-available/$PROJECT
+  sed -i "s/RASPI_IP/$RASPI_IP/g" /etc/nginx/sites-available/$PROJECT
   sed -i "s/PROJECT/$PROJECT/g" /etc/nginx/sites-available/$PROJECT
+  # TODO: This is a kindof ugly workaround, but otherwise it breaks:
   sed -i "s/arXXXgs/args/g" /etc/nginx/sites-available/$PROJECT
 
   if [ -f /etc/nginx/sites-available/$PROJECT ]; then
@@ -306,15 +356,17 @@ printf "%s\tsetting CakePHP permissions..." $(date +%H:%M:%S)
 printf "%s\tsetting CakePHP permissions..." $(date +%H:%M:%S) >> $INSTALL_LOG
 PROJECT_OWNER=$(ls -l /usr/share/nginx/www | grep $PROJECT | cut -d " " -f 3)
 if [ "$PROJECT_OWNER" != "pi" ]; then
-  sudo chown -R pi:www-data /usr/share/nginx/www/$PROJECT
+  chown -R pi:www-data /usr/share/nginx/www/$PROJECT
   checkrc $? && printf "%s\n" "$RESULT" >> $INSTALL_LOG
   printf "%s\n" $RESULT
 else
   printf "[already correct]\n" >> $INSTALL_LOG
   printf "[${GREEN}already correct${NC}]\n"
 fi
-# force tmp and log directories to be writable
+# force tmp and log directories to be writable for www-data
 if [ -d /usr/share/nginx/www/$PROJECT ]; then
+  chown -R www-data:pi /usr/share/nginx/www/$PROJECT/tmp
+  chown -R www-data:pi /usr/share/nginx/www/$PROJECT/logs
   chmod -R 775 /usr/share/nginx/www/$PROJECT/tmp
   chmod -R 775 /usr/share/nginx/www/$PROJECT/logs
 fi
